@@ -776,8 +776,8 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 		e.error.Set(1)
 	
 		// Return -1 for all metrics if Pgpool-II is unavailable
-		for metricNamespace, mapping := range e.metricMap {
-			for columnName, metric := range mapping.columnMappings {
+		for _, mapping := range e.metricMap {
+			for _, metric := range mapping.columnMappings {
 				if metric.discard {
 					continue
 				}
@@ -798,6 +798,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	
 		return
 	}
+	
 	
 	
 
