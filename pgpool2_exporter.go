@@ -33,6 +33,10 @@ import (
 	"strconv"
 	"sync"
 	"time"
+	"os/exec"
+    "bufio"
+    "bytes"
+    "strings"
 
 	"github.com/blang/semver"
 	"github.com/go-kit/log/level"
@@ -157,6 +161,8 @@ type Exporter struct {
 	totalScrapes prometheus.Counter
 	metricMap    map[string]MetricMapNamespace
 	DB           *sql.DB
+    watchdogNodeStatus     *prometheus.Desc
+    watchdogNodeIsLeader   *prometheus.Desc
 }
 
 var (
@@ -267,6 +273,17 @@ func NewExporter(dsn string, namespace string) *Exporter {
 		}),
 		metricMap: makeDescMap(metricMaps, namespace),
 		DB:        db,
+		
+		watchdogNodeStatus: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
+			"Status of the watchdog node (1=alive, 0=dead)",
+			[]string{"host", "status_name", "membership"}, nil,
+		),
+		watchdogNodeIsLeader: prometheus.NewDesc(
+			prometheus.BuildFQName(namespace, "", "watchdog_node_is_leader"),
+			"Whether the watchdog node is the current leader (1=yes, 0=no)",
+			[]string{"host"}, nil,
+		),
 	}
 }
 
@@ -751,6 +768,45 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 // Collect implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.scrape(ch)
+
+	nodes, err := parseWatchdogNodes()
+	if err != nil {
+		level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
+	} else {
+		for _, node := range nodes {
+			host := node["Host Name"]
+			statusName := node["Status Name"]
+			membership := node["Membership Status"]
+
+			// pgpool2_watchdog_node_status: 1이면 정상, DEAD이면 0
+			var statusVal float64 = 0
+			if statusName != "DEAD" {
+				statusVal = 1
+			}
+
+			ch <- prometheus.MustNewConstMetric(
+				e.watchdogNodeStatus,
+				prometheus.GaugeValue,
+				statusVal,
+				host, statusName, membership,
+			)
+
+			// pgpool2_watchdog_node_is_leader: leader이면 1, 아니면 0
+			var isLeader float64 = 0
+			if statusName == "LEADER" {
+				isLeader = 1
+			}
+
+			ch <- prometheus.MustNewConstMetric(
+				e.watchdogNodeIsLeader,
+				prometheus.GaugeValue,
+				isLeader,
+				host,
+			)
+		}
+	}
+
+
 	ch <- e.duration
 	ch <- e.up
 	ch <- e.totalScrapes
@@ -864,3 +920,53 @@ func makeDescMap(metricMaps map[string]map[string]ColumnMapping, namespace strin
 
 	return metricMap
 }
+
+func parseWatchdogNodes() ([]map[string]string, error) {
+    output, err := exec.Command("pcp_watchdog_info", "-v").Output()
+    if err != nil {
+        return nil, err
+    }
+
+    scanner := bufio.NewScanner(bytes.NewReader(output))
+
+    var nodes []map[string]string
+    var inNodeSection bool
+    var current map[string]string
+
+    for scanner.Scan() {
+        line := strings.TrimSpace(scanner.Text())
+
+        if strings.HasPrefix(line, "Watchdog Node Information") {
+            inNodeSection = true
+            continue
+        }
+
+        if inNodeSection && line == "" {
+            if current != nil {
+                nodes = append(nodes, current)
+                current = nil
+            }
+            continue
+        }
+
+        if inNodeSection {
+            if current == nil {
+                current = make(map[string]string)
+            }
+
+            parts := strings.SplitN(line, ":", 2)
+            if len(parts) == 2 {
+                key := strings.TrimSpace(parts[0])
+                val := strings.TrimSpace(parts[1])
+                current[key] = val
+            }
+        }
+    }
+
+    if current != nil {
+        nodes = append(nodes, current)
+    }
+
+    return nodes, nil
+}
+
