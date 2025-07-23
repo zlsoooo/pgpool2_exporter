@@ -771,24 +771,35 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 
 	// Check connection availability and close the connection if it fails.
 	if err = ping(e.DB); err != nil {
-		level.Error(Logger).Log("msg", "Error pinging Pgpool-II", "err", err)
-		if cerr := e.DB.Close(); cerr != nil {
-			level.Error(Logger).Log("msg", "Error while closing non-pinging connection", "err", err)
-		}
-		level.Info(Logger).Log("msg", "Reconnecting to Pgpool-II")
-		e.DB, err = sql.Open("postgres", e.dsn)
-		e.DB.SetMaxOpenConns(1)
-		e.DB.SetMaxIdleConns(1)
-
-		if err = ping(e.DB); err != nil {
-			level.Error(Logger).Log("msg", "Error pinging Pgpool-II", "err", err)
-			if cerr := e.DB.Close(); cerr != nil {
-				level.Error(Logger).Log("msg", "Error while closing non-pinging connection", "err", err)
+		level.Error(Logger).Log("msg", "Pgpool-II is down", "err", err)
+		e.up.Set(0)
+		e.error.Set(1)
+	
+		// Return -1 for all metrics if Pgpool-II is unavailable
+		for metricNamespace, mapping := range e.metricMap {
+			for columnName, metric := range mapping.columnMappings {
+				if metric.discard {
+					continue
+				}
+				// Use "unknown" as default label values
+				labels := make([]string, len(mapping.labels))
+				for i := range labels {
+					labels[i] = "unknown"
+				}
+				// Export a default metric value of -1
+				ch <- prometheus.MustNewConstMetric(
+					metric.desc,
+					metric.vtype,
+					-1,
+					labels...,
+				)
 			}
-			e.up.Set(0)
-			return
 		}
+	
+		return
 	}
+	
+	
 
 	e.up.Set(1)
 	e.error.Set(0)
