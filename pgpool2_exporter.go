@@ -276,14 +276,15 @@ func NewExporter(dsn string, namespace string) *Exporter {
 
 		watchdogNodeStatus: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
-			"Status of the watchdog node (1=alive, 0=dead)",
-			[]string{"host", "status_name", "membership"}, nil,
+			"Status of the watchdog node (1=alive, 0=dead, -1=error)",
+			[]string{"host", "status_name", "membership", "error"}, nil,
 		),
+		
 		watchdogNodeIsLeader: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_is_leader"),
-			"Whether the watchdog node is the current leader (1=yes, 0=no)",
-			[]string{"host"}, nil,
-		),
+			"Whether the watchdog node is the current leader (1=yes, 0=no, -1=error)",
+			[]string{"host", "error"}, nil,
+		),		
 	}
 }
 
@@ -778,14 +779,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			e.watchdogNodeStatus,
 			prometheus.GaugeValue,
 			-1,
-			"unknown", "UNKNOWN", "UNKNOWN",
+			"unknown", "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
 		)
+		
 		ch <- prometheus.MustNewConstMetric(
 			e.watchdogNodeIsLeader,
 			prometheus.GaugeValue,
 			-1,
-			"unknown",
+			"unknown", "pgpool is down or pcp_watchdog_info failed",
 		)
+		
 	} else {
 		for _, node := range nodes {
 			host := node["Host Name"]
@@ -801,7 +804,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				e.watchdogNodeStatus,
 				prometheus.GaugeValue,
 				statusVal,
-				host, statusName, membership,
+				host, statusName, membership, "",
 			)
 
 			var isLeader float64 = 0
@@ -813,8 +816,8 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				e.watchdogNodeIsLeader,
 				prometheus.GaugeValue,
 				isLeader,
-				host,
-			)
+				host, "",
+			)			
 		}
 	}
 
