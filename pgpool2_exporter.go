@@ -273,7 +273,7 @@ func NewExporter(dsn string, namespace string) *Exporter {
 		}),
 		metricMap: makeDescMap(metricMaps, namespace),
 		DB:        db,
-		
+
 		watchdogNodeStatus: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
 			"Status of the watchdog node (1=alive, 0=dead)",
@@ -772,13 +772,26 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	nodes, err := parseWatchdogNodes()
 	if err != nil {
 		level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
+
+		// fallback: return -1 when no data is available
+		ch <- prometheus.MustNewConstMetric(
+			e.watchdogNodeStatus,
+			prometheus.GaugeValue,
+			-1,
+			"unknown", "UNKNOWN", "UNKNOWN",
+		)
+		ch <- prometheus.MustNewConstMetric(
+			e.watchdogNodeIsLeader,
+			prometheus.GaugeValue,
+			-1,
+			"unknown",
+		)
 	} else {
 		for _, node := range nodes {
 			host := node["Host Name"]
 			statusName := node["Status Name"]
 			membership := node["Membership Status"]
 
-			// pgpool2_watchdog_node_status: 1이면 정상, DEAD이면 0
 			var statusVal float64 = 0
 			if statusName != "DEAD" {
 				statusVal = 1
@@ -791,7 +804,6 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				host, statusName, membership,
 			)
 
-			// pgpool2_watchdog_node_is_leader: leader이면 1, 아니면 0
 			var isLeader float64 = 0
 			if statusName == "LEADER" {
 				isLeader = 1
@@ -805,6 +817,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			)
 		}
 	}
+
 
 
 	ch <- e.duration
