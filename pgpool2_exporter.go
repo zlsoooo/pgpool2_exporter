@@ -28,7 +28,7 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	_ "os"
+	"os"
 	"regexp"
 	"strconv"
 	"sync"
