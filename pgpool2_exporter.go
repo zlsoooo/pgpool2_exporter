@@ -276,7 +276,7 @@ func NewExporter(dsn string, namespace string) *Exporter {
 
 		watchdogNodeStatus: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
-			"Status of the watchdog node (1=alive, 0=dead, -1=error)",
+			"Status of the watchdog node (1=alive, 0=shutdown, -1=error)",
 			[]string{"hostname", "role", "membership", "error"}, nil,
 		),
 		
@@ -801,14 +801,14 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			e.watchdogNodeStatus,
 			prometheus.GaugeValue,
 			-1,
-			hostname, "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
+			hostname, "ERROR", "ERROR", "pgpool is down",
 		)
 		
 		ch <- prometheus.MustNewConstMetric(
 			e.watchdogNodeIsLeader,
 			prometheus.GaugeValue,
 			-1,
-			hostname, "pgpool is down or pcp_watchdog_info failed",
+			hostname, "pgpool is down",
 		)
 		
     } else {
@@ -818,7 +818,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
             membership := node["Membership Status"]
 
             var statusVal float64 = 0
-            if statusName != "DEAD" {
+            if statusName != "SHUTDOWN" {
                 statusVal = 1
             }
 
@@ -852,6 +852,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 	e.totalScrapes.Inc()
 	var err error
+	var errorLabelValue string
 	defer func(begun time.Time) {
 		e.duration.Set(time.Since(begun).Seconds())
 		if err == nil {
@@ -866,7 +867,7 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 		level.Error(Logger).Log("msg", "Pgpool-II is down", "err", err)
 		e.up.Set(0)
 		e.error.Set(1)
-	
+		errorLabelValue = "pgpool is down"
 		// Return -1 for all metrics if Pgpool-II is unavailable
 		for _, mapping := range e.metricMap {
 			for _, metric := range mapping.columnMappings {
@@ -878,7 +879,8 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 				for i := range labels {
 					labels[i] = "unknown"
 				}
-				// Export a default metric value of -1
+				// error 라벨 추가
+				labels[len(labels)-1] = errorLabelValue
 				ch <- prometheus.MustNewConstMetric(
 					metric.desc,
 					metric.vtype,
@@ -887,20 +889,17 @@ func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
 				)
 			}
 		}
-	
 		return
 	}
-	
-	
-	
 
 	e.up.Set(1)
 	e.error.Set(0)
+	errorLabelValue = ""
 
 	e.mutex.RLock()
 	defer e.mutex.RUnlock()
 
-	errMap := queryNamespaceMappings(ch, e.DB, e.metricMap)
+	errMap := queryNamespaceMappingsWithErrorLabel(ch, e.DB, e.metricMap, errorLabelValue)
 	if len(errMap) > 0 {
 		level.Error(Logger).Log("err", errMap)
 		e.error.Set(1)
@@ -921,6 +920,8 @@ func makeDescMap(metricMaps map[string]map[string]ColumnMapping, namespace strin
 				variableLabels = append(variableLabels, columnName)
 			}
 		}
+		// error 라벨 추가
+		variableLabels = append(variableLabels, "error")
 
 		for columnName, columnMapping := range mappings {
 			// Determine how to convert the column based on its usage.
@@ -1004,5 +1005,103 @@ func parseWatchdogNodes() ([]map[string]string, error) {
     }
 
     return nodes, nil
+}
+
+// queryNamespaceMappings를 errorLabelValue를 받아서 전달하는 버전으로 새로 만듭니다.
+func queryNamespaceMappingsWithErrorLabel(ch chan<- prometheus.Metric, db *sql.DB, metricMap map[string]MetricMapNamespace, errorLabelValue string) map[string]error {
+	namespaceErrors := make(map[string]error)
+
+	for namespace, mapping := range metricMap {
+		if namespace == "pool_backend_stats" || namespace == "pool_health_check_stats" {
+			if PgpoolSemver.LT(version42) {
+				continue
+			}
+		}
+
+		level.Debug(Logger).Log("msg", "Querying namespace", "namespace", namespace)
+		nonFatalErrors, err := queryNamespaceMappingWithErrorLabel(ch, db, namespace, mapping, errorLabelValue)
+		if err != nil {
+			namespaceErrors[namespace] = err
+			level.Info(Logger).Log("msg", "namespace disappeard", "err", err)
+		}
+		if len(nonFatalErrors) > 0 {
+			for _, err := range nonFatalErrors {
+				level.Info(Logger).Log("msg", "error parsing", "err", err.Error())
+			}
+		}
+	}
+
+	return namespaceErrors
+}
+
+// queryNamespaceMapping도 errorLabelValue를 받아서 라벨에 추가하는 버전으로 새로 만듭니다.
+func queryNamespaceMappingWithErrorLabel(ch chan<- prometheus.Metric, db *sql.DB, namespace string, mapping MetricMapNamespace, errorLabelValue string) ([]error, error) {
+	query := fmt.Sprintf("SHOW %s;", namespace)
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return []error{}, errors.New(fmt.Sprintln("Error running query on database: ", namespace, err))
+	}
+	defer rows.Close()
+
+	var columnNames []string
+	columnNames, err = rows.Columns()
+	if err != nil {
+		return []error{}, errors.New(fmt.Sprintln("Error retrieving column list for: ", namespace, err))
+	}
+
+	var columnIdx = make(map[string]int, len(columnNames))
+	for i, n := range columnNames {
+		columnIdx[n] = i
+	}
+
+	var columnData = make([]interface{}, len(columnNames))
+	var scanArgs = make([]interface{}, len(columnNames))
+	for i := range columnData {
+		scanArgs[i] = &columnData[i]
+	}
+
+	nonfatalErrors := []error{}
+
+	for rows.Next() {
+		err = rows.Scan(scanArgs...)
+		if err != nil {
+			return []error{}, errors.New(fmt.Sprintln("Error retrieving rows:", namespace, err))
+		}
+
+		labels := make([]string, len(mapping.labels))
+		for idx, label := range mapping.labels {
+			if label == "error" {
+				labels[idx] = errorLabelValue
+			} else {
+				labels[idx], _ = dbToString(columnData[columnIdx[label]])
+			}
+		}
+
+		for idx, columnName := range columnNames {
+			if metricMapping, ok := mapping.columnMappings[columnName]; ok {
+				if metricMapping.discard {
+					continue
+				}
+				if columnName == "status" {
+					valueString, ok := dbToString(columnData[idx])
+					if !ok {
+						nonfatalErrors = append(nonfatalErrors, errors.New(fmt.Sprintln("Unexpected error parsing column: ", namespace, columnName, columnData[idx])))
+						continue
+					}
+					value := parseStatusField(valueString)
+					ch <- prometheus.MustNewConstMetric(metricMapping.desc, metricMapping.vtype, value, labels...)
+					continue
+				}
+				value, ok := dbToFloat64(columnData[idx])
+				if !ok {
+					nonfatalErrors = append(nonfatalErrors, errors.New(fmt.Sprintln("Unexpected error parsing column: ", namespace, columnName, columnData[idx])))
+					continue
+				}
+				ch <- prometheus.MustNewConstMetric(metricMapping.desc, metricMapping.vtype, value, labels...)
+			}
+		}
+	}
+	return nonfatalErrors, nil
 }
 
