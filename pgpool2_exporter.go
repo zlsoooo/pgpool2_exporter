@@ -277,7 +277,7 @@ func NewExporter(dsn string, namespace string) *Exporter {
 		watchdogNodeStatus: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
 			"Status of the watchdog node (1=alive, 0=shutdown, -1=error)",
-			[]string{"hostname", "role", "membership", "error"}, nil,
+			[]string{"hostname", "pgpool_role", "membership", "error"}, nil,
 		),
 		
 		watchdogNodeIsLeader: prometheus.NewDesc(
