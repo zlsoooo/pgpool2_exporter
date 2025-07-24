@@ -277,13 +277,13 @@ func NewExporter(dsn string, namespace string) *Exporter {
 		watchdogNodeStatus: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_status"),
 			"Status of the watchdog node (1=alive, 0=dead, -1=error)",
-			[]string{"host", "status_name", "membership", "error"}, nil,
+			[]string{"hostname", "status_name", "membership", "error"}, nil,
 		),
 		
 		watchdogNodeIsLeader: prometheus.NewDesc(
 			prometheus.BuildFQName(namespace, "", "watchdog_node_is_leader"),
 			"Whether the watchdog node is the current leader (1=yes, 0=no, -1=error)",
-			[]string{"host", "error"}, nil,
+			[]string{"hostname", "error"}, nil,
 		),		
 	}
 }
@@ -791,7 +791,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
     if err != nil {
         level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
 
-        // Use actual hostname for the 'host' label
+        // Use actual hostname for the 'hostname' label
         hostname := getLocalIP()
 		if hostname == "unknown" {
 			hostname = "127.0.0.1"
@@ -813,7 +813,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 		
     } else {
         for _, node := range nodes {
-            host := node["Host Name"]
+            hostname := node["Host Name"]
             statusName := node["Status Name"]
             membership := node["Membership Status"]
 
@@ -826,7 +826,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
                 e.watchdogNodeStatus,
                 prometheus.GaugeValue,
                 statusVal,
-                host, statusName, membership, "",
+                hostname, statusName, membership, "",
             )
 
             var isLeader float64 = 0
@@ -838,7 +838,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
                 e.watchdogNodeIsLeader,
                 prometheus.GaugeValue,
                 isLeader,
-                host, "",
+                hostname, "",
             )
         }
     }
