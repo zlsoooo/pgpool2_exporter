@@ -818,9 +818,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
             membership := node["Membership Status"]
 
             var statusVal float64 = 0
-            if statusName != "SHUTDOWN" {
-                statusVal = 1
-            }
+            if statusName != "SHUTDOWN" && statusName != "DEAD" {
+				statusVal = 1
+			}
 
             ch <- prometheus.MustNewConstMetric(
                 e.watchdogNodeStatus,
