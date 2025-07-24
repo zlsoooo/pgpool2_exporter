@@ -768,65 +768,66 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	e.scrape(ch)
+    e.scrape(ch)
 
-	nodes, err := parseWatchdogNodes()
-	if err != nil {
-		level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
+    nodes, err := parseWatchdogNodes()
+    if err != nil {
+        level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
 
-		// fallback: return -1 when no data is available
-		ch <- prometheus.MustNewConstMetric(
-			e.watchdogNodeStatus,
-			prometheus.GaugeValue,
-			-1,
-			"unknown", "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
-		)
-		
-		ch <- prometheus.MustNewConstMetric(
-			e.watchdogNodeIsLeader,
-			prometheus.GaugeValue,
-			-1,
-			"unknown", "pgpool is down or pcp_watchdog_info failed",
-		)
-		
-	} else {
-		for _, node := range nodes {
-			host := node["Host Name"]
-			statusName := node["Status Name"]
-			membership := node["Membership Status"]
+        // Use actual hostname for the 'host' label
+        hostname, errHost := os.Hostname()
+        if errHost != nil || hostname == "" {
+            hostname = "localhost"
+        }
 
-			var statusVal float64 = 0
-			if statusName != "DEAD" {
-				statusVal = 1
-			}
+        ch <- prometheus.MustNewConstMetric(
+            e.watchdogNodeStatus,
+            prometheus.GaugeValue,
+            -1,
+            hostname, "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
+        )
+        ch <- prometheus.MustNewConstMetric(
+            e.watchdogNodeIsLeader,
+            prometheus.GaugeValue,
+            -1,
+            hostname, "pgpool is down or pcp_watchdog_info failed",
+        )
+    } else {
+        for _, node := range nodes {
+            host := node["Host Name"]
+            statusName := node["Status Name"]
+            membership := node["Membership Status"]
 
-			ch <- prometheus.MustNewConstMetric(
-				e.watchdogNodeStatus,
-				prometheus.GaugeValue,
-				statusVal,
-				host, statusName, membership, "",
-			)
+            var statusVal float64 = 0
+            if statusName != "DEAD" {
+                statusVal = 1
+            }
 
-			var isLeader float64 = 0
-			if statusName == "LEADER" {
-				isLeader = 1
-			}
+            ch <- prometheus.MustNewConstMetric(
+                e.watchdogNodeStatus,
+                prometheus.GaugeValue,
+                statusVal,
+                host, statusName, membership, "",
+            )
 
-			ch <- prometheus.MustNewConstMetric(
-				e.watchdogNodeIsLeader,
-				prometheus.GaugeValue,
-				isLeader,
-				host, "",
-			)			
-		}
-	}
+            var isLeader float64 = 0
+            if statusName == "LEADER" {
+                isLeader = 1
+            }
 
+            ch <- prometheus.MustNewConstMetric(
+                e.watchdogNodeIsLeader,
+                prometheus.GaugeValue,
+                isLeader,
+                host, "",
+            )
+        }
+    }
 
-
-	ch <- e.duration
-	ch <- e.up
-	ch <- e.totalScrapes
-	ch <- e.error
+    ch <- e.duration
+    ch <- e.up
+    ch <- e.totalScrapes
+    ch <- e.error
 }
 
 func (e *Exporter) scrape(ch chan<- prometheus.Metric) {
