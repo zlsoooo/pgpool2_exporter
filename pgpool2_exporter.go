@@ -37,6 +37,7 @@ import (
     "bufio"
     "bytes"
     "strings"
+	"net"
 
 	"github.com/blang/semver"
 	"github.com/go-kit/log/level"
@@ -766,6 +767,23 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	<-doneCh
 }
 
+func getLocalIP() string {
+    addrs, err := net.InterfaceAddrs()
+    if err != nil {
+        return "unknown"
+    }
+
+    for _, addr := range addrs {
+        if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+            if ipnet.IP.To4() != nil {
+                return ipnet.IP.String()
+            }
+        }
+    }
+
+    return "unknown"
+}
+
 // Collect implements prometheus.Collector.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
     e.scrape(ch)
@@ -775,23 +793,25 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
         level.Warn(Logger).Log("msg", "Could not retrieve watchdog info", "err", err)
 
         // Use actual hostname for the 'host' label
-        hostname, errHost := os.Hostname()
-        if errHost != nil || hostname == "" {
-            hostname = "localhost"
-        }
+        hostname := getLocalIP()
+		if hostname == "unknown" {
+			hostname = "127.0.0.1"
+		}
 
         ch <- prometheus.MustNewConstMetric(
-            e.watchdogNodeStatus,
-            prometheus.GaugeValue,
-            -1,
-            hostname, "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
-        )
-        ch <- prometheus.MustNewConstMetric(
-            e.watchdogNodeIsLeader,
-            prometheus.GaugeValue,
-            -1,
-            hostname, "pgpool is down or pcp_watchdog_info failed",
-        )
+			e.watchdogNodeStatus,
+			prometheus.GaugeValue,
+			-1,
+			hostname, "ERROR", "ERROR", "pgpool is down or pcp_watchdog_info failed",
+		)
+		
+		ch <- prometheus.MustNewConstMetric(
+			e.watchdogNodeIsLeader,
+			prometheus.GaugeValue,
+			-1,
+			hostname, "pgpool is down or pcp_watchdog_info failed",
+		)
+		
     } else {
         for _, node := range nodes {
             host := node["Host Name"]
