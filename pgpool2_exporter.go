@@ -801,7 +801,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			e.watchdogNodeStatus,
 			prometheus.GaugeValue,
 			-1,
-			hostname, "ERROR", "ERROR", "pgpool is down",
+			hostname, "unknown", "unknown", "pgpool is down",
 		)
 		
 		ch <- prometheus.MustNewConstMetric(
